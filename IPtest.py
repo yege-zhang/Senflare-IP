@@ -1,5 +1,5 @@
 """
-IP Test - Cloudflare优选IP采集器 v2.1.0
+IP Test - Cloudflare优选IP采集器 v2.2.0
 高效采集、检测和识别Cloudflare 优选IP的状态和详情信息
 
 主要特性:
@@ -234,12 +234,30 @@ def delete_file_if_exists(file_path):
 
 def test_ip_availability(ip):
     """TCP Socket检测IP可用性 - 支持多端口自定义"""
+    # 验证IP地址格式
+    try:
+        parts = ip.split('.')
+        if len(parts) != 4 or not all(0 <= int(part) <= 255 for part in parts):
+            return (False, 0)
+    except (ValueError, AttributeError):
+        return (False, 0)
+    
+    # 检查测试端口配置
+    if not CONFIG["test_ports"] or not isinstance(CONFIG["test_ports"], list):
+        logger.warning(f"⚠️ 测试端口配置无效，跳过IP {ip}")
+        return (False, 0)
+    
     min_delay = float('inf')
     success_count = 0
     
     # 遍历配置的测试端口
     for port in CONFIG["test_ports"]:
         try:
+            # 验证端口号
+            if not isinstance(port, int) or not (1 <= port <= 65535):
+                logger.warning(f"⚠️ 无效端口号 {port}，跳过")
+                continue
+                
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(3)  # 3秒超时
                 start_time = time.time()
@@ -255,6 +273,9 @@ def test_ip_availability(ip):
                         return (True, delay)
         except (socket.timeout, socket.error, OSError):
             continue  # 继续测试下一个端口
+        except Exception as e:
+            logger.debug(f"IP {ip} 端口 {port} 检测异常: {str(e)[:30]}")
+            continue
     
     # 返回最佳结果
     if success_count > 0:
@@ -271,15 +292,15 @@ def get_ip_region(ip):
         cached_data = region_cache[ip]
         if isinstance(cached_data, dict) and 'timestamp' in cached_data:
             if is_cache_valid(cached_data['timestamp'], CONFIG["cache_ttl_hours"]):
-                logger.debug(f"📦 IP {ip} 地区信息从缓存获取: {cached_data['region']}")
+                logger.info(f"📦 IP {ip} 地区信息从缓存获取: {cached_data['region']}")
                 return cached_data['region']
         else:
             # 兼容旧格式缓存
-            logger.debug(f"📦 IP {ip} 地区信息从缓存获取（旧格式）: {cached_data}")
+            logger.info(f"📦 IP {ip} 地区信息从缓存获取（旧格式）: {cached_data}")
             return cached_data
     
     # 尝试主要API
-    logger.debug(f"🌐 IP {ip} 开始API查询（主要API: ipinfo.io）...")
+    logger.info(f"🌐 IP {ip} 开始API查询（主要API: ipinfo.io）...")
     try:
         resp = session.get(f'https://ipinfo.io/{ip}?token=2cb674df499388', timeout=CONFIG["api_timeout"])
         if resp.status_code == 200:
@@ -289,16 +310,16 @@ def get_ip_region(ip):
                     'region': country_code,
                     'timestamp': datetime.now().isoformat()
                 }
-                logger.debug(f"✅ IP {ip} 主要API识别成功: {country_code}")
+                logger.info(f"✅ IP {ip} 主要API识别成功: {country_code}")
                 return country_code
         else:
-            logger.debug(f"⚠️ IP {ip} 主要API返回状态码: {resp.status_code}")
+            logger.warning(f"⚠️ IP {ip} 主要API返回状态码: {resp.status_code}")
     except Exception as e:
-        logger.debug(f"❌ IP {ip} 主要API识别失败: {str(e)[:30]}")
+        logger.error(f"❌ IP {ip} 主要API识别失败: {str(e)[:30]}")
         pass
     
     # 尝试备用API
-    logger.debug(f"🌐 IP {ip} 尝试备用API（ip-api.com）...")
+    logger.info(f"🌐 IP {ip} 尝试备用API（ip-api.com）...")
     try:
         resp = session.get(f'http://ip-api.com/json/{ip}?fields=countryCode', timeout=CONFIG["api_timeout"])
         if resp.json().get('status') == 'success':
@@ -308,16 +329,16 @@ def get_ip_region(ip):
                     'region': country_code,
                     'timestamp': datetime.now().isoformat()
                 }
-                logger.debug(f"✅ IP {ip} 备用API识别成功: {country_code}")
+                logger.info(f"✅ IP {ip} 备用API识别成功: {country_code}")
                 return country_code
         else:
-            logger.debug(f"⚠️ IP {ip} 备用API返回状态: {resp.json().get('status', 'unknown')}")
+            logger.warning(f"⚠️ IP {ip} 备用API返回状态: {resp.json().get('status', 'unknown')}")
     except Exception as e:
-        logger.debug(f"❌ IP {ip} 备用API识别失败: {str(e)[:30]}")
+        logger.error(f"❌ IP {ip} 备用API识别失败: {str(e)[:30]}")
         pass
     
     # 失败返回Unknown
-    logger.debug(f"❌ IP {ip} 所有API识别失败，标记为Unknown")
+    logger.warning(f"❌ IP {ip} 所有API识别失败，标记为Unknown")
     region_cache[ip] = {
         'region': 'Unknown',
         'timestamp': datetime.now().isoformat()
@@ -342,7 +363,7 @@ def test_ips_concurrently(ips, max_workers=None):
     available_ips = []
     
     # 使用更小的批次，避免卡住
-    batch_size = 20  # 减少批次大小到20
+    batch_size = CONFIG["batch_size"]  # 使用配置的批次大小
     start_time = time.time()
     
     for i in range(0, len(ips), batch_size):
@@ -391,7 +412,7 @@ def test_ips_concurrently(ips, max_workers=None):
 def get_regions_concurrently(ips, max_workers=None):
     """优化的并发地区识别 - 保持日志顺序"""
     if max_workers is None:
-        max_workers = min(CONFIG["max_workers"], 15)  # 增加最大线程数到15
+        max_workers = CONFIG["max_workers"]  # 使用配置的最大线程数
     
     logger.info(f"🌍 开始并发地区识别 {len(ips)} 个IP，使用 {max_workers} 个线程")
     results = []
@@ -502,6 +523,11 @@ def main():
     # 3. IP去重与排序
     unique_ips = sorted(list(set(all_ips)), key=lambda x: [int(p) for p in x.split('.')])
     logger.info(f"🔢 去重后共 {len(unique_ips)} 个唯一IP地址")
+    
+    # 检查是否有IP需要检测
+    if not unique_ips:
+        logger.warning("⚠️ 没有采集到任何IP地址，程序结束")
+        return
 
     # 4. 并发检测IP可用性
     logger.info("📡 ===== 并发检测IP可用性 =====")
@@ -512,45 +538,46 @@ def main():
         with open('IPlist.txt', 'w', encoding='utf-8') as f:
             f.write('\n'.join([ip for ip, _ in available_ips]))
         logger.info(f"📄 已保存 {len(available_ips)} 个可用IP到 IPlist.txt")
+        
+        # 6. 并发地区识别与结果格式化
+        logger.info("🌍 ===== 并发地区识别与结果格式化 =====")
+        region_results = get_regions_concurrently(available_ips)
+        
+        # 按地区分组
+        region_groups = defaultdict(list)
+        for ip, region_code, delay in region_results:
+            country_name = get_country_name(region_code)
+            region_groups[country_name].append((ip, region_code, delay))
+        
+        logger.info(f"🌍 地区分组完成，共 {len(region_groups)} 个地区")
+        
+        # 7. 生成并保存最终结果
+        result = []
+        for region in sorted(region_groups.keys()):
+            # 同一地区内按延迟排序（更快的在前）
+            sorted_ips = sorted(region_groups[region], key=lambda x: x[2])
+            for idx, (ip, code, _) in enumerate(sorted_ips, 1):
+                result.append(f"{ip}#{code} {region}节点 | {idx:02d}")
+            logger.debug(f"地区 {region} 格式化完成，包含 {len(sorted_ips)} 个IP")
+        
+        if result:
+            with open('Senflare.txt', 'w', encoding='utf-8') as f:
+                f.write('\n'.join(result))
+            logger.info(f"📊 已保存 {len(result)} 条格式化记录到 Senflare.txt")
+        else:
+            logger.warning("⚠️ 无有效记录可保存")
+        
+        # 8. 保存缓存并显示统计信息
+        save_region_cache()
+        
+        # 显示总耗时
+        run_time = round(time.time() - start_time, 2)
+        logger.info(f"⏱️ 总耗时: {run_time}秒")
+        logger.info(f"📊 缓存统计: 总计 {len(region_cache)} 个")
+        logger.info("🏁 ===== 程序完成 =====")
     else:
         logger.warning("⚠️ 未检测到可用IP，跳过后续处理")
-
-    # 6. 并发地区识别与结果格式化
-    logger.info("🌍 ===== 并发地区识别与结果格式化 =====")
-    region_results = get_regions_concurrently(available_ips)
-    
-    # 按地区分组
-    region_groups = defaultdict(list)
-    for ip, region_code, delay in region_results:
-        country_name = get_country_name(region_code)
-        region_groups[country_name].append((ip, region_code, delay))
-    
-    logger.info(f"🌍 地区分组完成，共 {len(region_groups)} 个地区")
-    
-    # 7. 生成并保存最终结果
-    result = []
-    for region in sorted(region_groups.keys()):
-        # 同一地区内按延迟排序（更快的在前）
-        sorted_ips = sorted(region_groups[region], key=lambda x: x[2])
-        for idx, (ip, code, _) in enumerate(sorted_ips, 1):
-            result.append(f"{ip}#{code} {region}节点 | {idx:02d}")
-        logger.debug(f"地区 {region} 格式化完成，包含 {len(sorted_ips)} 个IP")
-    
-    if result:
-        with open('Senflare.txt', 'w', encoding='utf-8') as f:
-            f.write('\n'.join(result))
-        logger.info(f"📊 已保存 {len(result)} 条格式化记录到 Senflare.txt")
-    else:
-        logger.warning("⚠️ 无有效记录可保存")
-    
-    # 8. 保存缓存并显示统计信息
-    save_region_cache()
-    
-    # 显示总耗时
-    run_time = round(time.time() - start_time, 2)
-    logger.info(f"⏱️ 总耗时: {run_time}秒")
-    logger.info(f"📊 缓存统计: 总计 {len(region_cache)} 个")
-    logger.info("🏁 ===== 程序完成 =====")
+        return
 
 # ===== 程序入口 =====
 if __name__ == "__main__":
