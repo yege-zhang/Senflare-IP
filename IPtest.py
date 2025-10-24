@@ -55,7 +55,6 @@ CONFIG = {
         'https://cf.090227.xyz/CloudFlareYes', # Hostmonit（备用）
         # 'https://stock.hostmonit.com/CloudFlareYes', # Hostmonit
         'https://ipdb.api.030101.xyz/?type=bestproxy&country=true', # Mingyu
-        'https://ipdb.api.030101.xyz/?type=bestcf&country=true', # Mingyu
         'https://ip.haogege.xyz/', # 好哥哥
         'https://vps789.com/openApi/cfIpTop20', # VPS789-综合排名前20
         'https://vps789.com/openApi/cfIpApi', # VPS789-动态获取接口
@@ -68,9 +67,7 @@ CONFIG = {
 
     # 脚本参数配置
     "test_ports": [443],            # 测试核心端口 示例：[443, 2053, 2083, 2087, 2096, 8443, 2052, 2082, 2086, 2095, 8444] # 443系端口：HTTPS和Cloudflare专用端
-    "timeout": 8,                   # 减少超时时间到8秒
-    "retries": 1,                   # 减少重试次数到1次
-    "tcp_ping_ports": [443],        # 测试核心端口TCP Ping 示例：[443, 2053, 2083, 2087, 2096, 8443, 2052, 2082, 2086, 2095, 8444] # 443系端口：HTTPS和Cloudflare专用端
+    "timeout": 8,                   # IP采集超时时间
     "api_timeout": 5,               # API查询超时时间（减少到5秒）
     "query_interval": 0.1,          # API查询间隔（减少到0.1秒，大幅提升速度）
     
@@ -234,51 +231,32 @@ def delete_file_if_exists(file_path):
 
 # ===== 网络检测模块 =====
 
-def tcp_ping(ip):
-    """
-    TCP Ping检测（兼容多环境）
-    通过尝试连接常用端口判断网络连通性
-    """
-    min_delay = float('inf')
-    for port in CONFIG["tcp_ping_ports"]:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(CONFIG["timeout"] / 2)  # 单个端口超时
-                start_time = time.time()
-                if s.connect_ex((ip, port)) == 0:
-                    # 计算延迟并保留最小值
-                    delay = (time.time() - start_time) * 1000
-                    min_delay = min(min_delay, delay)
-        except Exception as e:
-            continue  # 忽略单个端口错误
-    
-    return (True, round(min_delay)) if min_delay != float('inf') else (False, 0)
 
 def test_ip_availability(ip):
-    """超快IP可用性检测（防卡住优化）"""
+    """TCP Socket检测IP可用性 - 支持多端口自定义"""
     min_delay = float('inf')
     success_count = 0
     
-    # 超快检测策略：单次检测，短超时，快速失败
+    # 遍历配置的测试端口
     for port in CONFIG["test_ports"]:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                # 使用更短的超时时间，快速检测
-                s.settimeout(3)  # 固定3秒超时
+                s.settimeout(3)  # 3秒超时
                 start_time = time.time()
                 
+                # 尝试TCP连接
                 if s.connect_ex((ip, port)) == 0:
                     delay = round((time.time() - start_time) * 1000)
                     min_delay = min(min_delay, delay)
                     success_count += 1
                     
-                    # 如果延迟很好，立即返回
+                    # 如果延迟很好，立即返回最佳结果
                     if delay < 200:
                         return (True, delay)
-        except:
-            continue
+        except (socket.timeout, socket.error, OSError):
+            continue  # 继续测试下一个端口
     
-    # 如果检测到可用IP，返回最佳结果
+    # 返回最佳结果
     if success_count > 0:
         return (True, min_delay)
     
@@ -411,41 +389,49 @@ def test_ips_concurrently(ips, max_workers=None):
     return available_ips
 
 def get_regions_concurrently(ips, max_workers=None):
-    """优化的并发地区识别"""
+    """优化的并发地区识别 - 保持日志顺序"""
     if max_workers is None:
         max_workers = min(CONFIG["max_workers"], 15)  # 增加最大线程数到15
     
     logger.info(f"🌍 开始并发地区识别 {len(ips)} 个IP，使用 {max_workers} 个线程")
     results = []
-    completed = 0
     start_time = time.time()
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
         future_to_ip = {executor.submit(get_ip_region, ip): (ip, delay) for ip, delay in ips}
         
-        for future in as_completed(future_to_ip):
-            ip, delay = future_to_ip[future]
-            completed += 1
-            try:
-                region_code = future.result()
-                results.append((ip, region_code, delay))
-                country_name = get_country_name(region_code)
-                elapsed = time.time() - start_time
-                logger.info(f"[{completed}/{len(ips)}] {ip} -> {country_name} ({region_code}) - 耗时: {elapsed:.1f}s")
-                
-                # 添加小延迟确保日志顺序                time.sleep(0.01)  # 10ms延迟
-                
-                # 只在API查询时等待，缓存查询不需要等待
-                if completed % 5 == 0:  # 每5个IP等待一次，减少等待频率
-                    time.sleep(CONFIG["query_interval"])
-            except Exception as e:
-                logger.warning(f"地区识别失败 {ip}: {str(e)[:50]}")
-                results.append((ip, 'Unknown', delay))
-                elapsed = time.time() - start_time
-                logger.info(f"[{completed}/{len(ips)}] {ip} -> 未知 (Unknown) - 耗时: {elapsed:.1f}s")
-                
-                # 添加小延迟确保日志顺序
-                time.sleep(0.01)  # 10ms延迟
+        # 按提交顺序处理结果，保持日志顺序
+        for i, (ip, delay) in enumerate(ips, 1):
+            future = None
+            # 找到对应的future
+            for f, (f_ip, f_delay) in future_to_ip.items():
+                if f_ip == ip and f_delay == delay:
+                    future = f
+                    break
+            
+            if future:
+                try:
+                    region_code = future.result()
+                    results.append((ip, region_code, delay))
+                    country_name = get_country_name(region_code)
+                    elapsed = time.time() - start_time
+                    logger.info(f"[{i}/{len(ips)}] {ip} -> {country_name} ({region_code}) - 耗时: {elapsed:.1f}s")
+                    
+                    # 添加小延迟确保日志顺序
+                    time.sleep(0.01)  # 10ms延迟
+                    
+                    # 只在API查询时等待，缓存查询不需要等待
+                    if i % 5 == 0:  # 每5个IP等待一次，减少等待频率
+                        time.sleep(CONFIG["query_interval"])
+                except Exception as e:
+                    logger.warning(f"地区识别失败 {ip}: {str(e)[:50]}")
+                    results.append((ip, 'Unknown', delay))
+                    elapsed = time.time() - start_time
+                    logger.info(f"[{i}/{len(ips)}] {ip} -> 未知 (Unknown) - 耗时: {elapsed:.1f}s")
+                    
+                    # 添加小延迟确保日志顺序
+                    time.sleep(0.01)  # 10ms延迟
     
     total_time = time.time() - start_time
     logger.info(f"🌍 地区识别完成，处理了 {len(results)} 个IP，总耗时: {total_time:.1f}秒")
