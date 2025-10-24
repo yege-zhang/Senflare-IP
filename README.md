@@ -18,7 +18,7 @@
 ### 1. IP采集
 从多个源采集Cloudflare IP地址：
 - ✅ 行雺
-- ✅ GitHub Ymyuuu
+- ✅ Ymyuuu
 - ✅ 麒麟
 - ✅ Hostmonit
 - ✅ Mingyu API
@@ -53,7 +53,7 @@ python IPtest.py
 - `IPlist.txt` - 可用IP列表
 - `Senflare.txt` - 格式化结果
 - `Cache.json` - 地区缓存
-- `iptest.log` - 详细日志
+- `IPtest.log` - 详细日志
 
 ## 🤖 GitHub Actions
 
@@ -95,13 +95,14 @@ on:
 ### 核心配置
 ```python
 CONFIG = {
+    "ip_sources": [...],            # IP采集源列表
+    "test_ports": [443],            # 测试核心端口
+    "timeout": 8,                   # IP采集超时时间
+    "api_timeout": 5,               # API查询超时时间
+    "query_interval": 0.1,          # API查询间隔
     "max_workers": 20,              # 最大并发线程数
-    "timeout": 8,                   # 超时时间（优化到8秒）
-    "retries": 1,                   # 重试次数（优化到1次）
+    "batch_size": 10,               # 批量处理大小
     "cache_ttl_hours": 168,         # 缓存TTL（7天）
-    "api_timeout": 5,               # API查询超时（5秒）
-    "query_interval": 0.1,          # API查询间隔（0.1秒）
-    "test_ports": [443]  # 只测试443端口，示例：[443, 2053, 2083, 2087, 2096, 8443, 2052, 2082, 2086, 2095, 8444]
 }
 ```
 
@@ -113,7 +114,7 @@ CONFIG = {
 
 ## 📝 日志说明
 
-程序会生成详细的日志文件 `iptest.log`，包含：
+程序会生成详细的日志文件 `IPtest.log`，包含：
 - 🚀 程序启动和结束状态
 - 📊 IP采集过程详情和统计
 - 🔢 IP去重和排序信息
