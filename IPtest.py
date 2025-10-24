@@ -54,7 +54,7 @@ CONFIG = {
         'https://addressesapi.090227.xyz/CloudFlareYes', # Hostmonit
         'https://cf.090227.xyz/CloudFlareYes', # Hostmonit（备用）
         # 'https://stock.hostmonit.com/CloudFlareYes', # Hostmonit
-        'https://ipdb.api.030101.xyz/?type=bestproxy&country=true', # Mingyu
+        # 'https://ipdb.api.030101.xyz/?type=bestproxy&country=true', # Mingyu
         'https://ip.haogege.xyz/', # 好哥哥
         'https://vps789.com/openApi/cfIpTop20', # VPS789-综合排名前20
         'https://vps789.com/openApi/cfIpApi', # VPS789-动态获取接口
