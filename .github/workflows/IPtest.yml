@@ -1,4 +1,4 @@
-# IP Test - Cloudflare优选IP采集器自动化工作流 v2.2.0
+# IP Test - Cloudflare优选IP采集器自动化工作流 v2.3.0
 # 每3小时自动执行一次，用于采集、检测和识别Cloudflare优选IP
 # 
 # 主要特性:
@@ -12,6 +12,9 @@
 # - 超快检测：3秒单IP超时，实时进度显示
 # - 代码质量优化：健壮性增强，异常处理完善
 # - 配置统一：修复配置不一致问题，达到生产级质量
+# - 高级功能：TCP Ping测试、带宽测试、综合评分排名
+# - 多模式输出：标准模式和高级模式，满足不同需求
+# - API优化：使用ipinfo.io lite版本，提升稳定性和响应速度
 
 name: IP Test
 
@@ -62,8 +65,11 @@ jobs:
       with:
         name: ip-results # 产物名称
         path: | # 上传的文件路径
-          IPlist.txt # 可用IP列表
-          Senflare.txt # 格式化结果
+          IPlist.txt # 标准可用IP列表
+          Senflare.txt # 标准格式化结果
+          IPlist-Pro.txt # 高级优选IP列表
+          Senflare-Pro.txt # 高级格式化结果
+          Ranking.txt # 综合评分排名
           IPtest.log # 运行日志
           Cache.json # 地区缓存
           
@@ -74,7 +80,7 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         # 添加结果文件到暂存区
-        git add IPlist.txt Senflare.txt Cache.json
+        git add IPlist.txt Senflare.txt IPlist-Pro.txt Senflare-Pro.txt Ranking.txt Cache.json
         # 检查文件是否有变化，有变化则提交
         git diff --staged --quiet || git commit -m "Update IP results - $(date)"
         # 推送到远程仓库
